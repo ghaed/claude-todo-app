@@ -19,7 +19,8 @@
       }
     ],
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@elastic/elasticsearch": ["./node_modules/@elastic/elasticsearch"]
     }
   },
   "include": [
