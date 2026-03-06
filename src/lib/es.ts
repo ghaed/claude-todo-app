@@ -19,15 +19,20 @@ export interface Todo {
   text: string;
   completed: boolean;
   created_at: string;
+  user_id: string;
 }
 
 interface TodoSource {
   text: string;
   completed: boolean;
   created_at: string;
+  user_id: string;
 }
 
+let indexEnsured = false;
+
 export async function ensureIndex(): Promise<void> {
+  if (indexEnsured) return;
   const client = getClient();
   const { body: exists } = await client.indices.exists({ index: INDEX });
   if (!exists) {
@@ -39,20 +44,31 @@ export async function ensureIndex(): Promise<void> {
             text: { type: "text" },
             completed: { type: "boolean" },
             created_at: { type: "date" },
+            user_id: { type: "keyword" },
           },
         },
       },
     });
+  } else {
+    // Add user_id mapping if not already present (idempotent)
+    await client.indices.putMapping({
+      index: INDEX,
+      body: { properties: { user_id: { type: "keyword" } } },
+    });
   }
+  indexEnsured = true;
 }
 
-export async function getAllTodos(q?: string): Promise<Todo[]> {
+export async function getAllTodos(userId: string, q?: string): Promise<Todo[]> {
   await ensureIndex();
   const client = getClient();
+  const userFilter = { term: { user_id: userId } };
   const { body } = await client.search({
     index: INDEX,
     body: {
-      query: q ? { match: { text: q } } : { match_all: {} },
+      query: q
+        ? { bool: { must: [{ match: { text: q } }, userFilter] } }
+        : { bool: { filter: [userFilter] } },
       sort: [{ created_at: { order: "desc" } }],
       size: 100,
     },
@@ -61,16 +77,27 @@ export async function getAllTodos(q?: string): Promise<Todo[]> {
   return hits.map((hit) => ({ id: hit._id, ...hit._source }));
 }
 
-export async function createTodo(text: string): Promise<Todo> {
+export async function createTodo(userId: string, text: string): Promise<Todo> {
   await ensureIndex();
   const client = getClient();
   const created_at = new Date().toISOString();
   const { body } = await client.index({
     index: INDEX,
     refresh: true,
-    body: { text, completed: false, created_at },
+    body: { text, completed: false, created_at, user_id: userId },
   });
-  return { id: body._id, text, completed: false, created_at };
+  return { id: body._id, text, completed: false, created_at, user_id: userId };
+}
+
+export async function getTodo(id: string): Promise<Todo | null> {
+  const client = getClient();
+  try {
+    const { body } = await client.get({ index: INDEX, id });
+    const doc = body as { _id: string; _source: TodoSource };
+    return { id: doc._id, ...doc._source };
+  } catch {
+    return null;
+  }
 }
 
 export async function toggleTodo(id: string): Promise<Todo> {
